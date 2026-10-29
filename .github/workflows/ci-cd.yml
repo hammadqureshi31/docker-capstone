@@ -1,66 +1,117 @@
-name: DevOps & DBOps CI/CD Pipeline
+name: Production Docker CI/CD
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "main" ]
+    tags: [ 'v*.*.*' ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ "main" ]
+
+env:
+  REGISTRY_IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/devops-mastery-stack
 
 jobs:
-  build-and-test:
+  test-and-scan:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Unit & Integration Tests
+        run: |
+          cd app
+          pip install -r requirements.txt
+          pytest test_app.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create Dummy .env for CI
+      - name: Inject Production Secrets into .env
         run: |
-          echo "POSTGRES_USER=masteryuser" >> .env
-          echo "POSTGRES_PASSWORD=masterysecretpassword" >> .env
-          echo "POSTGRES_DB=masterydb" >> .env
+          echo "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" >> .env
+          echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
+          echo "POSTGRES_DB=${{ secrets.POSTGRES_DB }}" >> .env
           echo "REDIS_HOST=redis-cache" >> .env
           echo "DB_HOST=postgres-db" >> .env
 
-      - name: Spin up 3-Tier Stack with Docker Compose
+      - name: Spin up 3-Tier Hardened Stack
         run: |
           docker compose up -d --build
 
-      - name: Wait for Services to Initialize
+      - name: Wait for PostgreSQL Health Check
         run: |
-          echo "Waiting for PostgreSQL health check..."
+          echo "Waiting for postgres-db to become healthy..."
           until docker inspect -f '{{.State.Health.Status}}' postgres-db 2>/dev/null | grep -q "healthy"; do
             sleep 3
           done
-          echo "PostgreSQL is healthy and ready!"
+          echo "PostgreSQL is healthy and operational!"
 
-      - name: Run Smoke Test against API / Nginx
-        run: |
-          # Test direct container or proxy response
-          curl -I http://localhost || true
-
-      - name: Test DBOps Backup Script in CI
+      - name: Execute Automated DBOps Backup Script
         run: |
           mkdir -p backups
           ./scripts/backup-db.sh
-          ls -lh backups/
 
-      - name: Test Automated Disaster Recovery Verification Script
+      - name: Execute Automated Disaster Recovery Verification
         run: |
           ./scripts/verify-dr.sh
 
-      - name: Security Scan Container Image with Trivy
+      - name: Run Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'docker-capstone-flask-api:latest'
           format: 'table'
-          exit-code: '0' # Set to '1' to fail build on critical vulns
+          exit-code: '0'
           severity: 'CRITICAL,HIGH'
 
       - name: Teardown Stack
         if: always()
         run: |
           docker compose down -v
+
+  build-and-push:
+    needs: test-and-scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Docker Meta (Automated Tagging Strategy)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Set up QEMU (Multi-Platform Emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Multi-Platform Image with Layer Caching
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
