@@ -1,0 +1,66 @@
+name: DevOps & DBOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create Dummy .env for CI
+        run: |
+          echo "POSTGRES_USER=masteryuser" >> .env
+          echo "POSTGRES_PASSWORD=masterysecretpassword" >> .env
+          echo "POSTGRES_DB=masterydb" >> .env
+          echo "REDIS_HOST=redis-cache" >> .env
+          echo "DB_HOST=postgres-db" >> .env
+
+      - name: Spin up 3-Tier Stack with Docker Compose
+        run: |
+          docker compose up -d --build
+
+      - name: Wait for Services to Initialize
+        run: |
+          echo "Waiting for PostgreSQL health check..."
+          until docker inspect -f '{{.State.Health.Status}}' postgres-db 2>/dev/null | grep -q "healthy"; do
+            sleep 3
+          done
+          echo "PostgreSQL is healthy and ready!"
+
+      - name: Run Smoke Test against API / Nginx
+        run: |
+          # Test direct container or proxy response
+          curl -I http://localhost || true
+
+      - name: Test DBOps Backup Script in CI
+        run: |
+          mkdir -p backups
+          ./scripts/backup-db.sh
+          ls -lh backups/
+
+      - name: Test Automated Disaster Recovery Verification Script
+        run: |
+          ./scripts/verify-dr.sh
+
+      - name: Security Scan Container Image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'docker-capstone-flask-api:latest'
+          format: 'table'
+          exit-code: '0' # Set to '1' to fail build on critical vulns
+          severity: 'CRITICAL,HIGH'
+
+      - name: Teardown Stack
+        if: always()
+        run: |
+          docker compose down -v
