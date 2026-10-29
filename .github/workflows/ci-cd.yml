@@ -51,6 +51,21 @@ jobs:
           done
           echo "PostgreSQL is healthy and operational!"
 
+      - name: Seed Test Data into Database
+        run: |
+          docker exec -i postgres-db psql -U masteryuser -d masterydb <<EOF
+          CREATE TABLE IF NOT EXISTS mastery_users (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(100) NOT NULL,
+              role VARCHAR(100),
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              is_active BOOLEAN DEFAULT TRUE
+          );
+          INSERT INTO mastery_users (name, role, is_active)
+          VALUES ('CI Test User', 'DevOps Automation Engineer', true)
+          ON CONFLICT DO NOTHING;
+          EOF
+
       - name: Execute Automated DBOps Backup Script
         run: |
           mkdir -p backups
