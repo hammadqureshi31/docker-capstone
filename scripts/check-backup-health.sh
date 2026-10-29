@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-BACKUP_DIR="/home/hammad/projects/docker-capstone/backups"
+# Dynamically resolve project root and backups directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_DIR="$SCRIPT_DIR/../backups"
 MAX_AGE_MINUTES=10
 
 # Find the newest custom format dump backup file

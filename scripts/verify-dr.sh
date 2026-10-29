@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
-BACKUP_DIR="/home/hammad/projects/docker-capstone/backups"
+# Dynamically resolve project root and backups directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_DIR="$SCRIPT_DIR/../backups"
+
 LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/masterydb_full_*.dump 2>/dev/null | head -n 1)
 
 if [ -z "$LATEST_BACKUP" ]; then
